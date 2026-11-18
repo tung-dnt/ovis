@@ -744,6 +744,9 @@ const BASE: Record<string, string> = {
   "Add a note": "メモを追加",
   "Note": "メモ",
   "Memory|notes": "メモリー",
+  "Close failed: {reason}": "閉じられませんでした: {reason}",
+  "Close pane {name}?": "ペイン{name}を閉じますか？",
+  "The pane's running processes will stop. Closing its last pane also closes the workspace.": "ペインで実行中のプロセスが停止します。最後のペインを閉じるとワークスペースも閉じます。",
 };
 
 export const JA_PARTS: Record<string, Record<string, string>> = {
