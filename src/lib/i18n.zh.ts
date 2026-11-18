@@ -739,6 +739,9 @@ const BASE: Record<string, string> = {
   "Reload page": "重新加载页面",
   "Stop": "停止",
   "Disconnect": "断开连接",
+  "Close failed: {reason}": "关闭失败：{reason}",
+  "Close pane {name}?": "关闭面板 {name}？",
+  "The pane's running processes will stop. Closing its last pane also closes the workspace.": "面板中运行的进程将停止。关闭最后一个面板也会关闭工作区。",
 };
 
 export const ZH_PARTS: Record<string, Record<string, string>> = {

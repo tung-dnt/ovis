@@ -734,6 +734,9 @@ const BASE: Record<string, string> = {
   "Reload page": "ページを再読み込み",
   "Stop": "停止",
   "Disconnect": "切断",
+  "Close failed: {reason}": "閉じられませんでした: {reason}",
+  "Close pane {name}?": "ペイン{name}を閉じますか？",
+  "The pane's running processes will stop. Closing its last pane also closes the workspace.": "ペインで実行中のプロセスが停止します。最後のペインを閉じるとワークスペースも閉じます。",
 };
 
 export const JA_PARTS: Record<string, Record<string, string>> = {
