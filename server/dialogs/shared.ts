@@ -109,6 +109,7 @@ type Responder =
   | "hermes-reload-skills"
   | "omp-submit"
   | "omp-handoff"
+  | "omp-form"
   | "opencode-question"
   | "opencode-v1-question"
   | "fallback-menu"

@@ -20,6 +20,7 @@ const CARD_TEXT = [
   "Claude Code removed {count} invisible characters",
   "Command approval",
   "Choose an option",
+  "Show all choices",
   "Permission request",
   "Waiting for your answer",
   "Waiting for input",

@@ -199,6 +199,7 @@ export const COMPOSER_JA: Record<string, string> = {
   "Claude Code removed {count} invisible characters": "Claude Code が見えない文字を {count} 個削除しました",
   "Command approval": "コマンドの承認",
   "Choose an option": "選択肢を選ぶ",
+  "Show all choices": "すべての選択肢を表示",
   "Permission request": "権限のリクエスト",
   "Waiting for input": "入力待ち",
   "Submit these answers?": "これらの回答を送信しますか?",

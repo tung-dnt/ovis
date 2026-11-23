@@ -199,6 +199,7 @@ export const COMPOSER_ZH: Record<string, string> = {
   "Claude Code removed {count} invisible characters": "Claude Code 删除了 {count} 个不可见字符",
   "Command approval": "命令批准",
   "Choose an option": "选择一个选项",
+  "Show all choices": "显示所有选项",
   "Permission request": "权限请求",
   "Waiting for input": "等待输入",
   "Submit these answers?": "提交这些答案吗？",
