@@ -1,5 +1,5 @@
 import type { HealthAuth } from "../../shared/protocol.ts";
-import { fetchBridgeHealth, signOut, signOutOfPortal } from "./api.ts";
+import { fetchBridgeHealth, forgetStoredConversations, signOut, signOutOfPortal } from "./api.ts";
 
 /**
  * Whether this browser can end the sign-in it got in with: a token it typed or a paired device's,
@@ -21,6 +21,7 @@ export function canSignOut(auth: HealthAuth | null): boolean {
  * from the bridge's health, which answers while herdr is down, as signing out must.
  */
 export async function endSignIn(via: HealthAuth["via"]): Promise<{ reload: boolean }> {
+  await forgetStoredConversations();
   if (via !== "portal") {
     await signOut();
     if ((await fetchBridgeHealth()).auth.via !== "portal") return { reload: false };

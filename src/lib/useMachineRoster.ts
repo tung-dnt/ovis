@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject
 import { pcHeld } from "./relay/newPcHere.ts";
 import type { DevicePairedEvent, DeviceRemovedEvent, Machine, MachineEvent, PendingKey, RelayPairingRequest, RemotePairingRequest } from "../../shared/machines.ts";
 import type { ServerMessage } from "../../shared/protocol.ts";
-import { ApiError, authenticate, fetchMachines, observePaneSessions, paneSessionEvents, paneSessionsMoving, verifySourceBoot } from "./api.ts";
+import { ApiError, authenticate, fetchMachines, forgetStoredConversations, observePaneSessions, paneSessionEvents, paneSessionsMoving, verifySourceBoot } from "./api.ts";
 import { passingFolder, recentDirectories } from "./recent-directories.ts";
 import { keepMachineEvents } from "./machineEventStream.ts";
 import { MachineSessionRegistry } from "./machineSession.ts";
@@ -216,7 +216,7 @@ export function useRosterLoader({ locked, healthFailing, rosterIn, setMachines, 
       } : undefined);
     }
     catch (err) {
-      if (err instanceof ApiError && err.status === 401) { setLocked(true); return; }
+      if (err instanceof ApiError && err.status === 401) { setLocked(true); void forgetStoredConversations(); return; }
       // an account-joined device on a PC from before it answered this read: the roster comes over the socket alone
       if (err instanceof ApiError && err.status === 403 && err.code === "local_only") { carrierBack(); setError(null); return; }
       if (err instanceof CarrierDownError) {
