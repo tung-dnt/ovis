@@ -109,6 +109,8 @@ type Responder =
   | "hermes-reload-skills"
   | "omp-submit"
   | "omp-handoff"
+  | "omp-plan"
+  | "omp-plan-exit"
   | "opencode-question"
   | "opencode-v1-question"
   | "fallback-menu"
@@ -145,6 +147,8 @@ export type ParsedPrompt = InteractivePrompt & {
   ompQuestionCut?: true;
   /** omp: the pane's one open ask call this card was read under (session and call id, omp-ask.ts), checked again before each key */
   ompCall?: string;
+  /** omp's Plan Review overlay: the region its keys act on now (dialogs/omp-plan.ts); the card's id does not hold it */
+  ompPlan?: { focus: "actions" | "body" | "toc" };
   claudeUltracode?: boolean | null;
   /** a Claude Bash approval's command, as its panel shows it between its dashed rules */
   claudeBashCommand?: string;
