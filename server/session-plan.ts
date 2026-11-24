@@ -10,6 +10,11 @@ export interface SessionPlanDeps {
   claudePath: (paneId: string) => string | null;
   omoPath?: (paneId: string) => string | null;
   codexPath: (pane: HerdrPane) => Promise<string | null>;
+  /**
+   * omp's transcript, found as asynchronously as Codex's rollout and asked again the same way. One that fails for a moment
+   * (a process read, herdr busy) leaves the session already found for the same pane in place. Without it an omp pane has no plan.
+   */
+  ompPath?: (pane: HerdrPane) => Promise<string | null>;
   onChange: (paneId: string, summary: PlanSummary | null) => void;
   onContext?: (paneId: string, context: PaneContext | null) => void;
   claudeWindow?: (transcriptPath: string, model: string | null) => number | null;
@@ -33,7 +38,8 @@ export class SessionPlans {
   private readonly panes = new Map<string, Tracked>();
   private readonly wanted = new Map<string, string>();
   private refreshed = false;
-  private readonly looking = new Set<string>();
+  /** the look under way for each pane, and the key it is made for: its answer is kept only while it is still the pane's */
+  private readonly looking = new Map<string, { key: string }>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly now: () => number;
 
@@ -73,7 +79,7 @@ export class SessionPlans {
   async refresh(panes: HerdrPane[]): Promise<void> {
     this.wanted.clear();
     this.refreshed = true;
-    for (const pane of panes) if (pane.agent === "claude" || pane.agent === "codex" || pane.agent === "omo") this.wanted.set(pane.pane_id, keyOf(pane));
+    for (const pane of panes) if (pane.agent === "claude" || pane.agent === "codex" || pane.agent === "omo" || pane.agent === "omp") this.wanted.set(pane.pane_id, keyOf(pane));
     for (const [paneId, tracked] of this.panes) {
       if (this.wanted.has(paneId)) continue;
       this.panes.delete(paneId);
@@ -84,8 +90,10 @@ export class SessionPlans {
   }
 
   async ensure(pane: HerdrPane, asked = false): Promise<void> {
-    if (pane.agent !== "claude" && pane.agent !== "codex" && pane.agent !== "omo") return;
+    if (pane.agent !== "claude" && pane.agent !== "codex" && pane.agent !== "omo" && pane.agent !== "omp") return;
     const key = keyOf(pane);
+    // a look under way for another session of the pane, or for what it ran before, stands for it no more
+    if (this.looking.get(pane.pane_id)?.key !== key) this.looking.delete(pane.pane_id);
     if (pane.agent === "omo") {
       const path = this.deps.omoPath?.(pane.pane_id) ?? null;
       this.track(pane.pane_id, key, path === null ? null : { source: "omo-session", path });
@@ -96,16 +104,25 @@ export class SessionPlans {
       this.track(pane.pane_id, key, path === null ? null : { source: "claude-transcript", path });
       return;
     }
+    // Codex's rollout and omp's transcript are found by a look that takes time and may find nothing yet: it is made again as the
+    // session or folder changes, and as time passes (retryMs while none is known, relocateMs once one is)
+    const source = pane.agent === "codex" ? "codex-transcript" : "omp-transcript";
+    const find = pane.agent === "codex" ? this.deps.codexPath : this.deps.ompPath;
     const tracked = this.panes.get(pane.pane_id);
     const due = !tracked || tracked.key !== key || this.now() - tracked.at >= (tracked.where === null ? this.deps.retryMs ?? 15_000 : this.deps.relocateMs ?? 30_000);
     if (!due || this.looking.has(pane.pane_id)) return;
-    this.looking.add(pane.pane_id);
+    const look = { key };
+    this.looking.set(pane.pane_id, look);
     try {
-      const path = await this.deps.codexPath(pane).catch(() => null);
+      const path = (await find?.(pane).catch(() => null)) ?? null;
+      // the pane's session was looked up again since: what the look before it found is for no session the pane runs, a request's too
+      if (this.looking.get(pane.pane_id) !== look) return;
       if (!asked && this.refreshed && this.wanted.get(pane.pane_id) !== key) return;
-      this.track(pane.pane_id, key, path === null ? null : { source: "codex-transcript", path });
+      const current = this.panes.get(pane.pane_id);
+      const kept = path === null && source === "omp-transcript" && current?.key === key ? current.where : null;
+      this.track(pane.pane_id, key, path === null ? kept : { source, path });
     } finally {
-      this.looking.delete(pane.pane_id);
+      if (this.looking.get(pane.pane_id) === look) this.looking.delete(pane.pane_id);
     }
   }
 

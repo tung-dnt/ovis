@@ -111,6 +111,8 @@ type Responder =
   | "omp-submit"
   | "omp-handoff"
   | "omp-form"
+  | "omp-plan"
+  | "omp-plan-exit"
   | "opencode-question"
   | "opencode-permission"
   | "opencode-v1-question"
@@ -152,6 +154,8 @@ export type ParsedPrompt = InteractivePrompt & {
   ompCall?: string;
   /** omp 19 form: the focused choice group runs past the scrolled box's edge (dialogs/omp-form.ts); omp-ask.ts fills it from the call's HTML */
   ompFormCut?: OmpFormCut;
+  /** omp's Plan Review overlay: the region its keys act on now (dialogs/omp-plan.ts); the card's id does not hold it */
+  ompPlan?: { focus: "actions" | "body" | "toc" };
   claudeUltracode?: boolean | null;
   /**
    * the shell command of an approval dialog the approval hub binds a held request to (server/approvals/hub.ts): Claude's

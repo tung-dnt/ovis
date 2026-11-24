@@ -18,6 +18,7 @@ import { ompCallPrompt, ompFormPrompt, ompMarkdownPrompt, ompOpenCall, ompStepPr
 import { answerPiAskUser, bindPiAsk, piAskActivity, piAskUserPrompt } from "./pi-ask-bridge.ts";
 import { badRequest, errorResponse, jsonResponse, setRequestRoute } from "./http.ts";
 import { claudePlanFile } from "./claude-plan.ts";
+import { ompPlanFile } from "./omp-plan.ts";
 import { heldBody, type ApprovalDialog, type ApprovalHub } from "./approvals/hub.ts";
 import { acpPrompt, answerAcpPrompt, type AcpCards } from "./approvals/acp.ts";
 import { listPendingPermissions, listPendingQuestionForms, openCodePermissionsRead, openCodeService, replyOpenCodeForm, replyOpenCodePermission, withShellInput } from "./opencode-service.ts";
@@ -872,6 +873,7 @@ class OmpCallChanged extends KeyRefused {}
 
 /** The request a card read from its agent's record is no longer the one the record holds open (record-cards.ts). */
 class RecordChanged extends KeyRefused {}
+class PlanChanged extends KeyRefused {}
 
 async function ompCallStillOpen(paneId: string, cwd: string, call: string, deadline: AbortSignal): Promise<boolean> {
   if (!cwd) return false;
@@ -1425,17 +1427,43 @@ function heldRequestOf(prompt: InteractivePrompt, promptId: string, approvals: A
 }
 
 /**
+ * A plan card with the plan, its revision part of the id: an answer to a card read before the plan changed is refused. The
+ * revision is the hash of the plan's text unless the file brings its own, as omp's does for a plan it reads in part.
+ */
+function planCard(prompt: InteractivePrompt, plan: { path: string; text: string; revision?: string }): InteractivePrompt {
+  const revision = (plan.revision ?? createHash("sha256").update(plan.text).digest("hex")).slice(0, 8);
+  return { ...prompt, id: `${prompt.id}.${revision}`, body: plan.text.slice(0, 12_000), plan_file: plan.path };
+}
+
+/**
  * A Claude plan card with the whole plan from Claude's plan file, as the screen shows only what fits
- * the pane. The plan's revision is part of the id, so an answer to a card read before the file
- * changed is refused.
+ * the pane.
  */
 async function withPlanFile(prompt: InteractivePrompt | null, transcript: string | null | undefined): Promise<InteractivePrompt | null> {
   if (!prompt || !transcript || parsedByPublicPrompt.get(prompt)?.responder !== "claude-plan") return prompt;
   const plan = await claudePlanFile(transcript);
-  if (!plan) return prompt;
-  const revision = createHash("sha256").update(plan.text).digest("hex").slice(0, 8);
-  return { ...prompt, id: `${prompt.id}.${revision}`, body: plan.text.slice(0, 12_000), plan_file: plan.path };
+  return plan ? planCard(prompt, plan) : prompt;
 }
+
+/**
+ * An omp Plan Review card, the same: the plan whole from the session's own `local/` folder (omp-plan.ts), where the
+ * overlay shows the part that fits. `transcript` looks the pane's omp session up, only for such a card. Without the
+ * plan (no session found, no file) the card keeps its choices alone.
+ */
+export async function withOmpPlanFile(prompt: InteractivePrompt | null, transcript: () => Promise<string | null>): Promise<InteractivePrompt | null> {
+  if (!prompt || parsedByPublicPrompt.get(prompt)?.responder !== "omp-plan") return prompt;
+  try {
+    const path = await transcript();
+    const plan = path === null ? null : await ompPlanFile(path);
+    return plan ? planCard(prompt, plan) : prompt;
+  } catch {
+    return prompt;
+  }
+}
+
+/** The omp session a plan card is read from, looked up the same way when the card is read and when it is answered: its id holds the plan's revision. */
+const ompPlanSession = (paneId: string, cwd: string | null | undefined) => async (): Promise<string | null> =>
+  cwd ? (await ompTranscriptPath(paneId, cwd)).path : null;
 
 /**
  * The prompt the pane shows now, as GET /api/pane/prompt reads it (without a plan's file), and the screen
@@ -1475,7 +1503,7 @@ const WAITING_RESPONDERS: ReadonlySet<string> = new Set([
   "claude-approval", "claude-confirm", "claude-plan", "claude-question", "claude-submit", "cmd-question",
   "codex-approval", "codex-question", "codex-async-question", "codex-queued-question", "codex-menu",
   "agy-question", "hermes-approval", "hermes-question", "hermes-input", "omo-question", "omo-review", "omo-pending",
-  "omp-approval", "omp-form", "omp-question", "omp-submit", "opencode-v1-question", "opencode-question", "opencode-permission",
+  "omp-approval", "omp-form", "omp-plan", "omp-question", "omp-submit", "opencode-v1-question", "opencode-question", "opencode-permission",
 ]);
 
 /** What the waiting a card stands for is about, in the words an agent's own report uses (`kind`); null: it does not say. */
@@ -1546,7 +1574,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       // `plan=0` is how a connection server asks for a watching device through its PC proxy, which
       // reaches this PC with its own credential: it only ever narrows the answer
       const watching = options.readOnly || url.searchParams.get("plan") === "0";
-      const prompt = watching ? read.prompt : await withPlanFile(read.prompt, options.claudeTranscript?.(paneId));
+      const prompt = watching ? read.prompt : await withOmpPlanFile(await withPlanFile(read.prompt, options.claudeTranscript?.(paneId)), ompPlanSession(paneId, read.pane.cwd));
       // no menu up: what the agent suggests typing next (Claude, and gjc and omp with their
       // suggestions turned on), for the composer's placeholder, and the chat's own last message where
       // Claude put it back into the box on a cancel. Only a nicety: it is read only while the agent
@@ -1615,12 +1643,15 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       if (!firstRead || Date.now() > deadlineAt) return promptChanged();
       const { prompt, agent, pane, panes, inputUnverified } = firstRead;
       if (inputUnverified || !prompt) return promptChanged();
-      // a plan card's id carries its plan file's revision: the file as it is now must match too. A command approval's
-      // can carry the held hook request it showed: that request must still be held, and still the one on the screen
+      // a plan card's id carries its plan file's revision: the file as it is now must match too, and once more before each
+      // key (guardKey). A command approval's can carry the held hook request it showed: that request must still be held,
+      // and still the one on the screen
       const heldId = heldRequestOf(prompt, body.prompt_id, options.approvals);
       if (heldId === null && heldOnly(prompt)) return promptChanged();
+      const withPlan = async (): Promise<InteractivePrompt> =>
+        (await withOmpPlanFile(await withPlanFile(prompt, options.claudeTranscript?.(body.pane_id)), ompPlanSession(body.pane_id, pane.cwd)))!;
       if (heldId !== null ? !options.approvals!.holds(body.pane_id, approvalDialog(prompt)!, heldId)
-        : (await withPlanFile(prompt, options.claudeTranscript?.(body.pane_id)))!.id !== body.prompt_id) return promptChanged();
+        : (await withPlan()).id !== body.prompt_id) return promptChanged();
       log.matched = true;
       waitedOn = waitingKindOf(prompt) !== undefined;
 
@@ -1637,6 +1668,9 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         // keeps main's keys)
         if (parsedPrompt?.responder === "dsh-question" && !(await dshAsks(paneId, signal))) throw new DshNotAsking();
         if (ompCall !== undefined && !(await ompCallStillOpen(paneId, pane.cwd ?? "", ompCall, signal))) throw new OmpCallChanged();
+        // a plan card's plan is read once more: the revision its id holds must be the file's now, as it may have changed since the
+        // check above. A change between this look and herdr writing the key is not seen: send_keys takes no condition on the plan
+        if ((parsedPrompt?.responder === "claude-plan" || parsedPrompt?.responder === "omp-plan") && (await untilAborted(withPlan(), signal))?.id !== body.prompt_id) throw new PlanChanged();
       };
       const verifyThenSend = async <T>(look: AbortSignal, guardUntil: number | null, readUntil: number,
         same: (shown: ParsedPrompt | null, screen: string, settled: ParsedPrompt | null) => boolean, write: () => T, screenOnly: boolean | "editor" = false): Promise<T> => {
@@ -2380,7 +2414,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       // other dialogs close a moment after the key too, and get the same wait
       if (responder === "claude-question" || responder === "claude-submit"
         || responder === "claude-approval" || responder === "claude-plan" || responder === "claude-confirm") form.still = claudeStepStill(parsedByPublicPrompt.get(target)!);
-      else if (target.steps) form.still = sameContent(contentId(target));
+      else if (target.steps || responder === "omp-plan") form.still = sameContent(contentId(target));
       else if (responder === "claude-model" || responder === "claude-effort" || responder === "codex-model") form.still = sameContent(lastSeen ?? contentId(target));
       return jsonResponse({ ok: true });
     });
