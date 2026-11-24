@@ -113,6 +113,8 @@ import { t } from "./i18n.ts";
 import { chatReadDeadlineMs, withChatReadDeadline } from "./chatReadDeadline.ts";
 import { movingHerdrFocus } from "./followFocus.ts";
 import { observeWaitingClock, waitingKey } from "./sentWaiting.ts";
+import { indexedConversationStore, type ConversationStore, type StoredConversation } from "./conversationStore.ts";
+import { ACCOUNT_SIGN_OUT_EVENT } from "./account/service.ts";
 import type { UsageAccountRemoval, UsageLoginAccounts, UsageLoginCode, UsageLoginFollowed, UsageLoginPrompt, UsageLoginProvider, UsageLoginRequest, UsageLoginStarted } from "../../shared/usage-login.ts";
 
 export function fetchUsageLoginProviders(signal: AbortSignal): Promise<{ providers: readonly UsageLoginProvider[] }> {
@@ -684,6 +686,7 @@ export function observePaneSessions(machines: readonly { id: string; snapshot: {
     for (const key of paneSessions.keys()) if (key.startsWith(paneKey("", machine.id)) && !listed.has(key)) paneSessions.delete(key);
     for (const key of paneCommandScopes.keys()) if (key.startsWith(paneKey("", machine.id)) && !listed.has(key)) paneCommandScopes.delete(key);
   }
+  void restoreConversations(machines.flatMap((machine) => machine.snapshot === null ? [] : [machine.id]));
 }
 
 export function paneCommandScope(paneId: string, machineId: string): string {
@@ -727,6 +730,133 @@ function conversationUrl(paneId: string, machineId: string, page: ConversationPa
 export function peekPaneConversation(paneId: string, machineId = "local", prompts?: number): ConversationResponse | undefined {
   const answer = conversationAnswers.get(conversationUrl(paneId, machineId, prompts === undefined ? {} : { prompts }));
   return answer?.session === sessionNow(paneKey(paneId, machineId)) ? answer?.body : undefined;
+}
+
+/**
+ * A chat's newest page, kept on this device so that a cold start (a reload, a phone that dropped the page in the
+ * background) paints the chat before the server answers. Only a named session's own conversation is kept, for a day:
+ * a row goes once the roster lists its pane under another session or not at all, on a 409, and when this browser
+ * signs out or is locked out. The kept answer seeds the in-memory one with its ETag, so the read the chat sends
+ * anyway comes back a bodyless 304 when nothing changed. Written at most every few seconds and when the page hides.
+ */
+export const STORED_CONVERSATION_MS = 24 * 60 * 60 * 1000;
+export const STORED_CONVERSATION_WRITE_MS = 5000;
+/** Fired on window with the `machine\0pane` key of a chat whose kept page was just restored. */
+export const CONVERSATION_RESTORED_EVENT = "ovis:conversation-restored";
+let conversationStore: ConversationStore = indexedConversationStore;
+let storedConversations: Promise<Map<string, StoredConversation>> | null = null;
+const unsavedConversations = new Map<string, StoredConversation>();
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+let listening = false;
+
+function listenForHideAndSignOut(): void {
+  if (listening || globalThis.window === undefined || globalThis.document === undefined) return;
+  listening = true;
+  // a phone drops a hidden page without a word: what it read last is written as it hides
+  globalThis.document.addEventListener("visibilitychange", () => { if (globalThis.document.visibilityState === "hidden") void flushConversations(); });
+  globalThis.window.addEventListener(ACCOUNT_SIGN_OUT_EVENT, () => { void forgetStoredConversations(); });
+}
+
+/** Test seam: the store a test reads and writes instead of IndexedDB, read afresh. */
+export function setConversationStore(store: ConversationStore): void {
+  conversationStore = store;
+  storedConversations = null;
+  unsavedConversations.clear();
+  clearTimeout(saveTimer);
+  saveTimer = undefined;
+}
+
+function keptConversations(): Promise<Map<string, StoredConversation>> {
+  listenForHideAndSignOut();
+  storedConversations ??= conversationStore.all().then((rows) => {
+    const kept = new Map<string, StoredConversation>();
+    const old: string[] = [];
+    for (const row of rows) {
+      if (Date.now() - row.saved < STORED_CONVERSATION_MS) kept.set(row.url, row);
+      else old.push(row.url);
+    }
+    if (old.length > 0) conversationStore.remove(old).catch(storeFailed);
+    return kept;
+  }, (error: unknown) => {
+    storeFailed(error);
+    return new Map<string, StoredConversation>();
+  });
+  return storedConversations;
+}
+
+function storeFailed(error: unknown): void {
+  console.warn("Ovis: the chat pages kept on this device could not be read or written", error instanceof Error ? error.name : error);
+}
+
+async function restoreConversations(machines: readonly string[]): Promise<void> {
+  const kept = await keptConversations();
+  const gone: string[] = [];
+  for (const row of kept.values()) {
+    if (!machines.includes(row.pane.slice(0, row.pane.indexOf("\u0000")))) continue;
+    const session = sessionNow(row.pane);
+    if (session !== row.session || Date.now() - row.saved >= STORED_CONVERSATION_MS) {
+      gone.push(row.url);
+      continue;
+    }
+    if (conversationAnswers.has(row.url)) continue;
+    conversationAnswers.set(row.url, { etag: row.etag, body: row.body, bytes: row.bytes, pane: row.pane, session });
+    trimConversationAnswers(row.url);
+    globalThis.window?.dispatchEvent?.(new CustomEvent(CONVERSATION_RESTORED_EVENT, { detail: row.pane }));
+  }
+  forgetConversations(kept, gone);
+}
+
+function forgetConversations(kept: Map<string, StoredConversation>, urls: readonly string[]): void {
+  if (urls.length === 0) return;
+  for (const url of urls) {
+    kept.delete(url);
+    unsavedConversations.delete(url);
+  }
+  conversationStore.remove(urls).catch(storeFailed);
+}
+
+function forgetPaneConversations(pane: string): void {
+  for (const [url, row] of unsavedConversations) if (row.pane === pane) unsavedConversations.delete(url);
+  void keptConversations().then((kept) => forgetConversations(kept, [...kept.values()].flatMap((row) => row.pane === pane ? [row.url] : [])));
+}
+
+function saveConversation(url: string, answer: ConversationAnswer): void {
+  if (answer.session === undefined || !namesSession(answer.session) || answer.body.source === "scrollback") return;
+  unsavedConversations.set(url, { url, pane: answer.pane, session: answer.session, etag: answer.etag, body: answer.body, bytes: answer.bytes, saved: Date.now() });
+  listenForHideAndSignOut();
+  saveTimer ??= setTimeout(() => { void flushConversations(); }, STORED_CONVERSATION_WRITE_MS);
+}
+
+export async function flushConversations(): Promise<void> {
+  clearTimeout(saveTimer);
+  saveTimer = undefined;
+  if (unsavedConversations.size === 0) return;
+  const rows = [...unsavedConversations.values()];
+  unsavedConversations.clear();
+  const kept = await keptConversations();
+  for (const row of rows) kept.set(row.url, row);
+  // the oldest go first past the in-memory cache's own bounds
+  const byAge = [...kept.values()].sort((a, b) => a.saved - b.saved);
+  let bytes = byAge.reduce((total, row) => total + row.bytes, 0);
+  const over: string[] = [];
+  while (byAge.length - over.length > CONVERSATION_ANSWERS_KEPT || bytes > CONVERSATION_ANSWERS_BYTES) {
+    const oldest = byAge[over.length]!;
+    over.push(oldest.url);
+    bytes -= oldest.bytes;
+  }
+  const written = rows.filter((row) => !over.includes(row.url));
+  forgetConversations(kept, over);
+  await conversationStore.put(written).catch(storeFailed);
+}
+
+/** Signing out, or a lock-out: nothing read under that sign-in stays on this device, in memory or kept. */
+export async function forgetStoredConversations(): Promise<void> {
+  conversationAnswers.clear();
+  unsavedConversations.clear();
+  clearTimeout(saveTimer);
+  saveTimer = undefined;
+  storedConversations = Promise.resolve(new Map());
+  await conversationStore.clear().catch(storeFailed);
 }
 
 interface PressRead { at: number; pane: string; session: string | undefined; controller: AbortController; read: Promise<ConversationResponse>; answer?: ConversationResponse }
@@ -810,6 +940,7 @@ async function readPaneConversation(paneId: string, machineId: string, page: Con
     if (plain !== undefined && lastNewestRead.get(plain) === read) lastNewestRead.delete(plain);
     if (cause instanceof ApiError && cause.status === 409 && sessionNow(pane) === session) {
       for (const [cached, answer] of conversationAnswers) if (cached === url || answer.pane === pane) conversationAnswers.delete(cached);
+      forgetPaneConversations(pane);
     }
     throw cause;
   });
@@ -838,6 +969,9 @@ async function readPaneConversation(paneId: string, machineId: string, page: Con
         conversationAnswers.set(plain, answer);
       }
       trimConversationAnswers(url);
+      // the page a cold start peeks: the newest one, with no cursor in its URL
+      const newest = page.from === undefined ? url : ownsPlain ? plain : undefined;
+      if (newest !== undefined) saveConversation(newest, answer);
     }
   }
   return body;

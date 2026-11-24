@@ -29,7 +29,7 @@ import { conversationFinishEvidence, conversationFinishPresented } from "../lib/
 import { seenKey } from "../lib/seenFinishes.ts";
 import { useWholeOutput as useScopedOutput } from "../lib/useWholeOutput.ts";
 import { turnSkills } from "../lib/skillActivity.ts";
-import { ApiError, pinPaneConversation, unpinPaneConversation } from "../lib/api.ts";
+import { ApiError, CONVERSATION_RESTORED_EVENT, pinPaneConversation, unpinPaneConversation } from "../lib/api.ts";
 import { copyText } from "../lib/clipboard.ts";
 import type { GalleryImage } from "../lib/imageViewer.ts";
 import { toolGalleryImage, userGalleryImages } from "../lib/chatImages.ts";
@@ -1547,6 +1547,14 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     lastAnswer.current = conversation;
   };
 
+  /** The pane's newest page as this tab or this device last read it, shown while its read is out. */
+  const paintKept = (): void => {
+    const cached = peekPaneConversation(paneId, pagePrompts);
+    if (cached === undefined || cached.source === "scrollback" || loadedChatTimeline() === null) return;
+    history.current = cached.history_id; setHistoryId(cached.history_id);
+    showAnswerDetails(cached);
+    showAnswer(cached, conversationState(cached));
+  };
   useLayoutEffect(() => {
     shownPane.current = paneId;
     stopRestore.current?.();
@@ -1562,13 +1570,16 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     setSentOver(null);
     setCancelledAtSend(null); setGoingCancel(null); lastStopped.current = null;
     wasConnected.current = connected;
-    const cached = peekPaneConversation(paneId, pagePrompts);
-    if (cached !== undefined && cached.source !== "scrollback" && loadedChatTimeline() !== null) {
-      history.current = cached.history_id; setHistoryId(cached.history_id);
-      showAnswerDetails(cached);
-      showAnswer(cached, conversationState(cached));
-    }
+    paintKept();
   }, [paneId, machineId]);
+  // a cold start: the page this device kept comes back after the chat mounted, while its first read is out
+  useEffect(() => {
+    const restored = (event: Event): void => {
+      if ((event as CustomEvent<string>).detail === `${machineId}\u0000${paneId}` && lastAnswer.current === null) paintKept();
+    };
+    window.addEventListener(CONVERSATION_RESTORED_EVENT, restored);
+    return () => window.removeEventListener(CONVERSATION_RESTORED_EVENT, restored);
+  }, [paneId, machineId, pagePrompts]);
 
 
   useEffect(() => {
