@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { act, createElement } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import type { AgentStatus, HerdrPane } from "../../shared/protocol.ts";
-import { paneCloseNeedsConfirm, usePaneClose, type ClosePaneRequest } from "./paneClose.ts";
+import { forgetPaneClosesForTests, paneCloseNeedsConfirm, usePaneClose, type ClosePaneRequest } from "./paneClose.ts";
 
 const makePane = (pane_id: string, workspace_id = "w1", agent_status: AgentStatus = "idle"): HerdrPane =>
   ({ pane_id, workspace_id, tab_id: `${workspace_id}:t1`, terminal_id: `${pane_id}:term`, revision: 1, focused: false, agent_status }) as HerdrPane;
@@ -39,6 +39,7 @@ describe("usePaneClose", () => {
     if (prev) Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", prev);
     else Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
     descriptors.clear();
+    forgetPaneClosesForTests();
   });
 
   function harness() {
@@ -73,6 +74,7 @@ describe("usePaneClose", () => {
       },
       roster: [p1, p2],
       isLive: (_machineId, paneId) => paneId === "p1" || paneId === "p2",
+      covers: () => true,
       onBeforeImmediate: (m, p) => events.push(`before:${m}:${p}`),
       onSuccess: (m, p) => events.push(`ok:${m}:${p}`),
       onError: (reason, m, p) => events.push(`err:${m}:${p}:${(reason as Error).message}`),
@@ -107,6 +109,7 @@ describe("usePaneClose", () => {
       },
       roster: [...live],
       isLive: (_m, paneId) => live.has(paneId),
+      covers: () => true,
       onSuccess: (m, p) => ok.push(`${m}:${p}`),
     });
     const h = harness();
@@ -150,6 +153,7 @@ describe("usePaneClose", () => {
       closePane: async (paneId, machineId) => { calls.push(`${machineId}:${paneId}`); },
       roster: [...panes],
       isLive: (m, p) => live.has(`${m}:${p}`),
+      covers: () => true,
     });
     const h = harness();
     await h.mount(baseProps([...live]));
@@ -178,6 +182,7 @@ describe("usePaneClose", () => {
       closePane: async () => {},
       roster: { live, locked, watching },
       isLive: () => live,
+      covers: () => true,
       isLocked: () => locked,
       watching,
       resetKey,
@@ -198,5 +203,45 @@ describe("usePaneClose", () => {
       locked = false; watching = false; live = true;
       await h.update(makeProps());
     }
+  });
+
+  it("shares the in-flight guard between views, and only a view that covers the PC releases it", async () => {
+    const p1 = makePane("p1", "w1", "idle");
+    const p2 = makePane("p2", "w1", "idle");
+    const live = new Set(["laptop:p1", "laptop:p2"]);
+    const calls: string[] = [];
+    const hooks: Record<string, ReturnType<typeof usePaneClose>> = {};
+    function Probe({ name, ...props }: Parameters<typeof usePaneClose>[0] & { name: string }) {
+      hooks[name] = usePaneClose(props);
+      return null;
+    }
+    const view = (name: string, covers: (machineId: string) => boolean) => createElement(Probe, {
+      key: name, name, covers,
+      closePane: async (paneId: string, machineId: string) => { calls.push(`${name}:${machineId}:${paneId}`); },
+      roster: [...live],
+      isLive: (m: string, p: string) => live.has(`${m}:${p}`),
+    });
+    // the canvas shows only "local"; the inbox lists every PC
+    const draw = (inbox: boolean) => createElement("div", null, view("canvas", (id) => id === "local"), inbox ? view("inbox", () => true) : null);
+    await act(async () => { renderer = create(draw(true)); });
+
+    // the inbox closes p2 at once; before herdr drops it, the canvas's p1 close in the same workspace waits
+    await act(async () => { hooks.inbox!.requestClose({ machineId: "laptop", pane: p2, panes: [p1, p2], label: "Two" }); });
+    await act(async () => { hooks.canvas!.requestClose({ machineId: "laptop", pane: p1, panes: [p1, p2], label: "One" }); });
+    expect(calls).toEqual(["inbox:laptop:p2"]);
+    expect(hooks.canvas!.closing).toBeNull();
+
+    // the inbox goes away (a phone's thread opens) and herdr drops p2: the canvas, which does not show
+    // that PC, cannot tell, so the guard holds
+    live.delete("laptop:p2");
+    await act(async () => { renderer!.update(draw(false)); });
+    await act(async () => { hooks.canvas!.requestClose({ machineId: "laptop", pane: p1, panes: [p1], label: "One" }); });
+    expect(hooks.canvas!.closing).toBeNull();
+
+    // the inbox back on a roster without p2 releases it, and p1, now the last pane, asks first
+    await act(async () => { renderer!.update(draw(true)); });
+    await act(async () => { hooks.inbox!.requestClose({ machineId: "laptop", pane: p1, panes: [p1], label: "One" }); });
+    expect(hooks.inbox!.closing?.label).toBe("One");
+    expect(calls).toEqual(["inbox:laptop:p2"]);
   });
 });

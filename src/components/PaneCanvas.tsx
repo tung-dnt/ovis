@@ -201,6 +201,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     closePane: (paneId) => api.closePane(paneId),
     roster: snapshot,
     isLive: (_machineId, paneId) => snapshot?.panes.some((item) => item.pane_id === paneId) === true,
+    covers: (id) => id === machineId,
     isLocked: (_machineId, paneId) => paneLocked(paneId),
     watching,
     resetKey: presented?.tab_id ?? null,

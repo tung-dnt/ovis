@@ -177,6 +177,7 @@ export function InboxList({ ref, machines, activity, watching, wide, filter, onF
       const machine = machines.find((candidate) => candidate.id === machineId);
       return machine?.state === "connected" && machine.snapshot?.panes.some((pane) => pane.pane_id === paneId) === true;
     },
+    covers: (machineId) => machines.some((candidate) => candidate.id === machineId),
     isLocked: paneLocked,
     watching,
     onBeforeImmediate: () => setCloseError(null),
