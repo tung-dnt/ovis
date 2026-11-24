@@ -96,7 +96,7 @@ describe("buildModeThreadItems and buildModeMoreItems", () => {
       ["copy-link", false, false],
       ["close", true, true],
       ["alerts", true, false],
-      ["settings", true, false],
+      ["settings", false, false],
     ]);
 
     const phoneList = buildModeMoreItems({ inboxWide: false, inboxShown: true, hasPane: true }, { palette, lead, thread, end, app });

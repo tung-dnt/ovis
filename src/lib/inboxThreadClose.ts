@@ -58,7 +58,7 @@ export function buildModeMoreItems(
   if (layout.inboxShown) return [...sections.app];
   const thread = sections.thread.map((item, index) => (index === 0 ? { ...item, divider: true } : item));
   if (layout.inboxWide) return [...sections.palette, ...thread];
-  const end = sections.end.map((item, index) => (index === 0 ? { ...item, divider: true } : item));
+  const end = sections.end.map((item, index) => ({ ...item, divider: index === 0 }));
   return [...sections.lead, ...thread, ...end];
 }
 

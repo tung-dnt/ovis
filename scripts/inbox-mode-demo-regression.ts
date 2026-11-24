@@ -2091,11 +2091,11 @@ try {
           }, lockedKey);
           await closeOf(BLOCKED).waitFor({ state: "detached" });
 
-          await page.locator(".inbox-rail .inbox-rail-exit").click();
+          await page.locator(".inbox-rail .inbox-rail-main").click();
           await page.locator(".app-header.is-zoned").waitFor();
           const classicPane = (await address(page)).pane;
           assert.ok(classicPane !== null && classicPane !== WORKING && classicPane !== DONE, "leaving inbox after closing its thread lands on a live classic pane");
-          console.log("PASS desktop close-agent: hidden at rest, hover reveals, current working pane asks confirm and clears to unchosen, split non-working pane closes immediately, locked pinned agent hides close, Back to Ovis opens a live pane");
+          console.log("PASS desktop close-agent: hidden at rest, hover reveals, current working pane asks confirm and clears to unchosen, split non-working pane closes immediately, locked pinned agent hides close, Back to main view opens a live pane");
         }, desktop);
 
         await withPage(browser, base, light, "/?app=inbox&demo_devices=watch", "a watching device sees no inbox row or thread close actions", async (page) => {
