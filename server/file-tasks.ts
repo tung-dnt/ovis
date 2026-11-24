@@ -2,7 +2,7 @@ import { constants, fstatSync, openSync, readSync, realpathSync } from "node:fs"
 import { sep } from "node:path";
 
 import type { MarkdownDocument } from "../shared/files.ts";
-import type { FileInfo, OmoTask, SlashCommand } from "../shared/protocol.ts";
+import type { DirectoryListing, FileInfo, OmoTask, SlashCommand } from "../shared/protocol.ts";
 import { agyCatalog, agyPendingSteps } from "./agy.ts";
 import type { AgyPendingStep } from "./dialogs/agy-record.ts";
 import type { HermesMessage } from "./dialogs/hermes-record.ts";
@@ -14,6 +14,7 @@ import { paneCommands } from "./commands.ts";
 import type { FileIdentity } from "./conversation-shared.ts";
 import { type LettaScanCutAnswer, lettaToolOutputIn } from "./letta.ts";
 import type { ProcessRoots } from "./skills/index.ts";
+import { createDirectory, type CreateDirectoryResult, listDirectories } from "./directories.ts";
 import { byteRange, describeWithin, fileInfo, openAuthorized, pageFileHooks, pageWithLocalFiles, pathsByName, release, STREAM_CHUNK_BYTES, type PageMedia, type PageMediaGrant } from "./file-view.ts";
 import { readMarkdownDocuments, walkFiles } from "./files.ts";
 import { readEditableText, TextEditRefused } from "./file-edit.ts";
@@ -66,7 +67,14 @@ export type FileTask =
    */
   | { op: "open"; path: string; get: { range: string | null; ifRange: boolean } | null; opened?: Int32Array<SharedArrayBuffer>; fastDiskMs?: number; within?: string | null }
   /** a text file in the pane's folder `cwd` read to edit (`file-edit.ts`; its save runs on the server's thread) */
-  | { op: "text-read"; path: string; cwd: string };
+  | { op: "text-read"; path: string; cwd: string }
+  /**
+   * The folder browser's listing and its New folder (`directories.ts`). On macOS a folder in iCloud Drive or
+   * another guarded place (a link to one too) is opened only once the PC's user answers a consent dialog on its
+   * screen, which nobody at a phone sees: the call waits on a thread here, never on the server's own.
+   */
+  | { op: "directories"; path: string; hidden: boolean; withFiles: boolean; base?: string | undefined }
+  | { op: "mkdir"; parent: string; name: string };
 
 /** A text file read to edit, or why not: a refusal crosses the thread as plain fields, not as the error. */
 export type TextTaskResult = { done: EditableText } | { refused: { status: number; code: string; message: string; revision?: string } };
@@ -89,7 +97,7 @@ export interface OpenedFile { size: number; range: [number, number] | "unsatisfi
 export const FAST_DISK_MS = 50;
 const PROBE_BYTES = 64 * 1024;
 
-export type FileTaskResult = FileInfo | FileInfo[] | { documents: MarkdownDocument[]; cut: boolean } | string[] | number[] | SlashCommand[] | OmoTask[] | AgyPendingStep[] | HermesMessage[] | boolean | string | LettaScanCutAnswer | RenderedPage | OpenedFile | { info: FileInfo; within: string } | TextTaskResult | null;
+export type FileTaskResult = FileInfo | FileInfo[] | { documents: MarkdownDocument[]; cut: boolean } | string[] | number[] | SlashCommand[] | OmoTask[] | AgyPendingStep[] | HermesMessage[] | boolean | string | LettaScanCutAnswer | RenderedPage | OpenedFile | { info: FileInfo; within: string } | TextTaskResult | DirectoryListing | CreateDirectoryResult | null;
 
 export function runFileTask(task: FileTask): FileTaskResult {
   switch (task.op) {
@@ -109,6 +117,8 @@ export function runFileTask(task: FileTask): FileTaskResult {
     case "render": return render(task.path, task.media, task.within ?? null);
     case "open": return open(task.path, task.get, task.opened, task.fastDiskMs ?? FAST_DISK_MS, task.within ?? null);
     case "text-read": return textTask(() => readEditableText(task.path, task.cwd));
+    case "directories": return listDirectories(task.path, task.hidden, task.withFiles, task.base);
+    case "mkdir": return createDirectory(task.parent, task.name);
   }
 }
 

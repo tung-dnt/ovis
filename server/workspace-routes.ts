@@ -8,11 +8,12 @@ import { isAbsolute, resolve } from "node:path";
 import { MAX_LABEL_CHARS } from "../shared/labels.ts";
 import { MAX_INVENTORY_WORKSPACES, type WorktreeInventoryEntry } from "../shared/workspace-lifecycle.ts";
 import { hasNoControlCharacters, firstMessageFault } from "../shared/launch-rules.ts";
-import type { DirectoryCreated, PendingMessage, ServerMessage, TabMoved, TabMovedToWorkspace, WorkspaceMoved } from "../shared/protocol.ts";
+import type { DirectoryCreated, DirectoryListing, PendingMessage, ServerMessage, TabMoved, TabMovedToWorkspace, WorkspaceMoved } from "../shared/protocol.ts";
 import type { FirstMessageAsk } from "./pending-input.ts";
 import type { MoveReceipt } from "./order-sequence.ts";
 import { agentFault, agentLaunch, type AgentPayload } from "./agent-launch.ts";
-import { createDirectory, expandedDirectory, listDirectories } from "./directories.ts";
+import { type CreateDirectoryResult, expandedDirectory } from "./directories.ts";
+import { fileTask } from "./file-pool.ts";
 import { HerdrError, paneMoveToNewTab, sessionSnapshot, tabClose, tabCreate, tabMove, tabRename, workspaceClose, workspaceCreate, workspaceMove, workspaceRename, worktreeCreate, worktreeList, worktreeOpen, worktreeRemove } from "./herdr/client.ts";
 import { badRequest, conflictResponse, errorResponse, isJsonObject, jsonResponse, readJsonObject, requestFault, setRequestRoute, wordedHeaders } from "./http.ts";
 import { paneContext } from "./pane-context.ts";
@@ -90,7 +91,7 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
     try { payload = await request.json(); } catch { return badRequest("invalid_json", "request body must be JSON"); }
     if (!isJsonObject(payload) || typeof payload["path"] !== "string" || typeof payload["name"] !== "string") return badRequest("invalid_body", "path and name must be strings");
     let made;
-    try { made = createDirectory(payload["path"], payload["name"]); } catch (error) { return errorResponse(error); }
+    try { made = await fileTask<CreateDirectoryResult>({ op: "mkdir", parent: payload["path"], name: payload["name"] }, request.signal); } catch (error) { return errorResponse(error); }
     if ("path" in made) return jsonResponse({ path: made.path } satisfies DirectoryCreated, 201);
     if (made.error === "folder_exists") return conflictResponse("folder_exists", "a file or folder with that name is already there");
     if (made.error === "permission_denied") return jsonResponse({ error: { code: "permission_denied", message: "this user cannot make a folder there" } }, 403);
@@ -110,7 +111,8 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
       const path = (url.searchParams.get("path") ?? "").trim();
       if (base === undefined && path !== "" && path !== "~" && !path.startsWith("~/") && !isAbsolute(path)) return badRequest("invalid_cwd", "the pane a relative path belongs to is gone");
     }
-    const listing = listDirectories(url.searchParams.get("path") ?? "", url.searchParams.get("hidden") === "1", url.searchParams.get("files") === "1", base);
+    let listing;
+    try { listing = await fileTask<DirectoryListing | null>({ op: "directories", path: url.searchParams.get("path") ?? "", hidden: url.searchParams.get("hidden") === "1", withFiles: url.searchParams.get("files") === "1", base }, request.signal); } catch (error) { return errorResponse(error); }
     return listing === null ? badRequest("invalid_cwd", "path must be a directory this user can read") : jsonResponse(listing);
   }
 
