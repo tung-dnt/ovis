@@ -43,6 +43,7 @@ import type {
   PaneSummaries,
   ClaudeArtifact,
   OmpBtwHistory,
+  OmpRecap,
   PaneBackgroundAgentDetail,
   OpenWorktreeRequest,
   PairedDevice,
@@ -1386,6 +1387,10 @@ export async function fetchPaneArtifacts(paneId: string, machineId = "local"): P
 export async function fetchPaneBtw(paneId: string, machineId = "local", signal?: AbortSignal): Promise<OmpBtwHistory> {
   const answer = await getJson<Partial<OmpBtwHistory>>(machinePath(machineId, `pane/btw?pane_id=${encodeURIComponent(paneId)}`), { signal });
   return { topics: answer.topics ?? [], more: answer.more === true };
+}
+
+export async function fetchPaneRecap(paneId: string, machineId = "local", signal?: AbortSignal): Promise<OmpRecap | null> {
+  return (await getJson<{ recap?: OmpRecap | null }>(machinePath(machineId, `pane/recap?pane_id=${encodeURIComponent(paneId)}`), { signal })).recap ?? null;
 }
 
 /** What the PC reads of a pane's plan (GET /api/pane/plan): no steps at all when the session keeps none. */
