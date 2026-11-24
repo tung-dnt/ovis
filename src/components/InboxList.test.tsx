@@ -9,6 +9,7 @@ import machinesFixture from "../../site/demo/fixtures/machines.json";
 import { inboxKey, inboxOrder, type InboxFilter } from "../lib/agentInbox.ts";
 import * as api from "../lib/api.ts";
 import type { HeaderConnection } from "../lib/headerConnection.ts";
+import { forgetPaneClosesForTests } from "../lib/paneClose.ts";
 import { PanePressContext } from "../lib/paneSubmitContext.ts";
 import { SettingsProvider } from "../lib/settings.ts";
 import { setSidebarPins } from "../lib/sidebarPins.ts";
@@ -129,6 +130,7 @@ describe("InboxList", () => {
       else Reflect.deleteProperty(globalThis, key);
     }
     descriptors.clear();
+    forgetPaneClosesForTests();
   });
 
   interface DrawOptions {

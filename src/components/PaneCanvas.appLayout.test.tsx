@@ -5,6 +5,7 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { HerdrPane, SessionSnapshot } from "../../shared/protocol.ts";
 import { AppLayoutContext, appLayoutOf, type LayoutOffer } from "../lib/machineContext.tsx";
+import { forgetPaneClosesForTests } from "../lib/paneClose.ts";
 import { SettingsProvider } from "../lib/settings.ts";
 import { setSidebarPins } from "../lib/sidebarPins.ts";
 import { usageCounters } from "../lib/usageCounters.ts";
@@ -56,6 +57,7 @@ describe("the pane canvas on a PC the Herdr app lays out", () => {
 
   afterEach(async () => {
     await act(async () => renderer?.unmount());
+    forgetPaneClosesForTests();
     renderer = undefined;
     for (const [key, descriptor] of descriptors) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);

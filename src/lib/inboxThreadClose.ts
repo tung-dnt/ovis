@@ -160,6 +160,7 @@ export function useInboxThreadClose({
       const machine = latest.current.machines.find((candidate) => candidate.id === machineId);
       return machine?.state === "connected" && machine.snapshot?.panes.some((pane) => pane.pane_id === paneId) === true;
     },
+    covers: (machineId) => latest.current.machines.some((candidate) => candidate.id === machineId),
     isLocked: paneLocked,
     watching,
     resetKey: offered ? threadKey : null,

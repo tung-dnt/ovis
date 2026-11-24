@@ -2,7 +2,9 @@
  * Shared pane-close rules (#237, #3286): closing the last pane in a workspace or an active
  * agent (`working` / `blocked`) asks for confirmation first, while an in-flight close per
  * `(machineId, workspaceId)` waits for herdr's roster update before accepting another close in
- * the same workspace.
+ * the same workspace. That in-flight registry is one for the page, so a close started from the
+ * canvas, an inbox row or an inbox thread is seen by the others, and survives the view that
+ * started it unmounting.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { HerdrPane } from "../../shared/protocol.ts";
@@ -31,6 +33,8 @@ interface UsePaneCloseOptions {
   /** Changes when the underlying snapshot or machine list updates, to prune completed closes. */
   roster: unknown;
   isLive: (machineId: string, paneId: string) => boolean;
+  /** The machines whose panes `isLive` can answer for; another view's close on any other PC is left alone. */
+  covers: (machineId: string) => boolean;
   isLocked?: (machineId: string, paneId: string) => boolean;
   watching?: boolean;
   /** Clears an open confirmation when the enclosing view moves on (such as switching tabs). */
@@ -40,10 +44,19 @@ interface UsePaneCloseOptions {
   onError?: (reason: unknown, machineId: string, paneId: string) => void;
 }
 
+// At most one unacknowledged close per (machine, workspace) until herdr drops the pane from the
+// roster, so a fast second close cannot miss the "last pane" check (#3286), from any view.
+const closingIn = new Map<string, { machineId: string; paneId: string }>();
+
+export function forgetPaneClosesForTests(): void {
+  closingIn.clear();
+}
+
 export function usePaneClose({
   closePane,
   roster,
   isLive,
+  covers,
   isLocked,
   watching = false,
   resetKey = null,
@@ -58,15 +71,12 @@ export function usePaneClose({
     return () => { alive.current = false; };
   }, []);
 
-  const latest = useRef({ closePane, isLive, isLocked, onBeforeImmediate, onSuccess, onError });
-  latest.current = { closePane, isLive, isLocked, onBeforeImmediate, onSuccess, onError };
+  const latest = useRef({ closePane, isLive, covers, isLocked, onBeforeImmediate, onSuccess, onError });
+  latest.current = { closePane, isLive, covers, isLocked, onBeforeImmediate, onSuccess, onError };
 
-  // Keep at most one unacknowledged close per (machine, workspace) until herdr drops the pane
-  // from the roster, so a fast second close cannot miss the "last pane" check (#3286).
-  const closingIn = useRef(new Map<string, { machineId: string; paneId: string }>());
   useEffect(() => {
-    for (const [scope, entry] of closingIn.current) {
-      if (!latest.current.isLive(entry.machineId, entry.paneId)) closingIn.current.delete(scope);
+    for (const [scope, entry] of closingIn) {
+      if (latest.current.covers(entry.machineId) && !latest.current.isLive(entry.machineId, entry.paneId)) closingIn.delete(scope);
     }
   }, [roster]);
 
@@ -85,19 +95,19 @@ export function usePaneClose({
 
   const executeClose = useCallback(async (target: ClosingPane): Promise<void> => {
     const scope = JSON.stringify([target.machineId, target.pane.workspace_id]);
-    closingIn.current.set(scope, { machineId: target.machineId, paneId: target.pane.pane_id });
+    closingIn.set(scope, { machineId: target.machineId, paneId: target.pane.pane_id });
     try {
       await latest.current.closePane(target.pane.pane_id, target.machineId);
     } catch (reason) {
-      const current = closingIn.current.get(scope);
-      if (current?.machineId === target.machineId && current.paneId === target.pane.pane_id) closingIn.current.delete(scope);
+      const current = closingIn.get(scope);
+      if (current?.machineId === target.machineId && current.paneId === target.pane.pane_id) closingIn.delete(scope);
       throw reason;
     }
   }, []);
 
   const requestClose = useCallback((request: ClosePaneRequest): void => {
     const scope = JSON.stringify([request.machineId, request.pane.workspace_id]);
-    if (closingIn.current.has(scope) || watching || latest.current.isLocked?.(request.machineId, request.pane.pane_id)) return;
+    if (closingIn.has(scope) || watching || latest.current.isLocked?.(request.machineId, request.pane.pane_id)) return;
     const target: ClosingPane = { machineId: request.machineId, pane: request.pane, label: request.label };
     if (paneCloseNeedsConfirm(request.pane, request.panes)) {
       setClosing(target);

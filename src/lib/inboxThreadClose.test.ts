@@ -7,6 +7,7 @@ import type { Machine } from "../../shared/machines.ts";
 import type { AgentStatus, HerdrPane, SessionSnapshot } from "../../shared/protocol.ts";
 import type { RowMenuItem } from "../components/RowMenu.tsx";
 import { ApiError } from "./api.ts";
+import { forgetPaneClosesForTests } from "./paneClose.ts";
 import {
   buildModeMoreItems,
   buildModeThreadItems,
@@ -95,7 +96,7 @@ describe("buildModeThreadItems and buildModeMoreItems", () => {
       ["copy-link", false, false],
       ["close", true, true],
       ["alerts", true, false],
-      ["settings", false, false],
+      ["settings", true, false],
     ]);
 
     const phoneList = buildModeMoreItems({ inboxWide: false, inboxShown: true, hasPane: true }, { palette, lead, thread, end, app });
@@ -164,6 +165,7 @@ describe("useInboxThreadClose", () => {
       else Reflect.deleteProperty(globalThis, key);
     }
     descriptors.clear();
+    forgetPaneClosesForTests();
   });
 
   function mountHook() {
