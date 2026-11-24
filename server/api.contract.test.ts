@@ -1978,6 +1978,28 @@ describe("workspace and discovery endpoints", () => {
     }
   });
 
+  // A folder macOS guards (iCloud Drive through a link, here) blocks its open until the PC's user answers a
+  // consent dialog: run on the server's thread, that one listing stopped every request and terminal.
+  it("lists and makes folders on a file thread: with none free, a retryable 503 while the server keeps answering", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-dirs-busy-"));
+    setFilePoolOptions({ workers: 0, waiting: 0 });
+    try {
+      const listed = await fetch(`${base()}/api/workspace/directories?path=${encodeURIComponent(root)}`);
+      expect(listed.status).toBe(503);
+      expect(listed.headers.get("retry-after")).toBe("1");
+      expect(await listed.json()).toMatchObject({ error: { code: "file_busy" } });
+      const made = await fetch(`${base()}/api/workspace/directories`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: root, name: "never-made" }),
+      });
+      expect(made.status).toBe(503);
+      expect(existsSync(join(root, "never-made"))).toBeFalse();
+      expect((await fetch(`${base()}/api/health?scope=bridge`)).status).toBe(200);
+    } finally {
+      setFilePoolOptions();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("lists an agent's commands for a folder before any pane runs it, locally and through the PC proxy, and refuses what it must", async () => {
     const root = mkdtempSync(join(tmpdir(), "ovis-agent-commands-"));
     try {
